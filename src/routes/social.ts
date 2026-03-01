@@ -53,7 +53,7 @@ router.get('/trending', async (_req: Request, res: Response) => {
 // GET /api/social/sentiment/:symbol
 router.get('/sentiment/:symbol', async (req: Request, res: Response) => {
   try {
-    const { symbol } = req.params;
+    const symbol = req.params.symbol as string;
     const redditPosts = await getAllSubredditPosts();
     const sentiment = getTickerSentiment(redditPosts, symbol);
 
@@ -70,9 +70,10 @@ router.get('/sentiment/:symbol', async (req: Request, res: Response) => {
 // GET /api/social/reddit/:subreddit
 router.get('/reddit/:subreddit', async (req: Request, res: Response) => {
   try {
-    const { subreddit } = req.params;
-    const sort = (req.query.sort as string) || 'hot';
-    const limit = parseInt(req.query.limit as string) || 25;
+    const subreddit = req.params.subreddit as string;
+    const sort = Array.isArray(req.query.sort) ? req.query.sort[0] as string : typeof req.query.sort === 'string' ? req.query.sort : 'hot';
+    const limitParam = Array.isArray(req.query.limit) ? req.query.limit[0] : req.query.limit;
+    const limit = parseInt(limitParam as string) || 25;
 
     const posts = await getSubredditPosts(subreddit, sort, limit);
     res.json(posts);

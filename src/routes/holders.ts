@@ -8,7 +8,7 @@ const router = Router();
 // GET /api/holders/:symbol
 router.get('/:symbol', async (req: Request, res: Response) => {
   try {
-    const { symbol } = req.params;
+    const symbol = req.params.symbol as string;
     const data = await getHolders(symbol);
     res.json(data);
   } catch (err) {

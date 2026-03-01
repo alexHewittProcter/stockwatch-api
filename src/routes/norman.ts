@@ -68,7 +68,7 @@ router.get('/reports', async (_req: Request, res: Response) => {
 // GET /api/norman/reports/:id
 router.get('/reports/:id', async (req: Request, res: Response) => {
   try {
-    const report = await normanAgent.getReport(req.params.id);
+    const report = await normanAgent.getReport(req.params.id as string);
 
     if (!report) {
       return res.status(404).json({ error: 'Report not found' });

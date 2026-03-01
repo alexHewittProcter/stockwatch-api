@@ -57,7 +57,7 @@ router.put('/', (req: Request, res: Response) => {
 // PUT /api/preferences/graph/:id — per-graph overrides
 router.put('/graph/:id', (req: Request, res: Response) => {
   try {
-    const { id } = req.params;
+    const id = req.params.id as string;
     const { chartType, interval, indicators } = req.body;
 
     const prefs = getPreferences();

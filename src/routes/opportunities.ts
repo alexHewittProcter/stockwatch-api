@@ -57,7 +57,7 @@ router.get('/conditions', (_req: Request, res: Response) => {
 // DELETE /api/opportunities/condition/:id
 router.delete('/condition/:id', (req: Request, res: Response) => {
   try {
-    const { id } = req.params;
+    const id = req.params.id as string;
     const deleted = deleteCondition(id);
 
     if (!deleted) {
@@ -74,7 +74,7 @@ router.delete('/condition/:id', (req: Request, res: Response) => {
 // PUT /api/opportunities/condition/:id/toggle
 router.put('/condition/:id/toggle', (req: Request, res: Response) => {
   try {
-    const { id } = req.params;
+    const id = req.params.id as string;
     const { enabled } = req.body;
     const updated = updateConditionEnabled(id, enabled);
 

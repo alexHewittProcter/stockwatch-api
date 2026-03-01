@@ -6,8 +6,8 @@ const router = Router();
 // GET /api/options/chain/:symbol
 router.get('/chain/:symbol', async (req: Request, res: Response) => {
   try {
-    const { symbol } = req.params;
-    const expiration = req.query.expiration as string | undefined;
+    const symbol = req.params.symbol as string;
+    const expiration = Array.isArray(req.query.expiration) ? req.query.expiration[0] as string : typeof req.query.expiration === 'string' ? req.query.expiration : undefined;
     const chain = await getOptionsChain(symbol, expiration);
     res.json(chain);
   } catch (err) {
@@ -19,7 +19,7 @@ router.get('/chain/:symbol', async (req: Request, res: Response) => {
 // GET /api/options/iv/:symbol
 router.get('/iv/:symbol', async (req: Request, res: Response) => {
   try {
-    const { symbol } = req.params;
+    const symbol = req.params.symbol as string;
     const ivData = await getIVData(symbol);
     res.json(ivData);
   } catch (err) {
