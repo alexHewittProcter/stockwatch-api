@@ -306,6 +306,125 @@ function initSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_opportunity_opportunities_timeframe ON opportunity_opportunities(timeframe);
     CREATE INDEX IF NOT EXISTS idx_opportunity_opportunities_created ON opportunity_opportunities(created_at DESC);
 
+    -- AI Learning system tables
+    CREATE TABLE IF NOT EXISTS trade_patterns (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL,
+      trade_id TEXT NOT NULL,
+      conditions TEXT NOT NULL DEFAULT '[]',
+      statistics TEXT NOT NULL DEFAULT '{}',
+      risk_factors TEXT NOT NULL DEFAULT '[]',
+      best_timeframes TEXT NOT NULL DEFAULT '[]',
+      market_conditions TEXT NOT NULL DEFAULT '[]',
+      used_count INTEGER NOT NULL DEFAULT 0,
+      live_win_rate REAL DEFAULT NULL,
+      live_trade_count INTEGER DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS pattern_matches (
+      id TEXT PRIMARY KEY,
+      pattern_id TEXT NOT NULL,
+      symbol TEXT NOT NULL,
+      match_date TEXT NOT NULL,
+      match_score REAL NOT NULL,
+      outcome TEXT DEFAULT NULL CHECK(outcome IN ('win', 'loss', NULL)),
+      return_pct REAL DEFAULT NULL,
+      hold_days INTEGER DEFAULT NULL,
+      entry_price REAL NOT NULL,
+      exit_price REAL DEFAULT NULL,
+      conditions TEXT NOT NULL DEFAULT '[]',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (pattern_id) REFERENCES trade_patterns(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS research_reports (
+      id TEXT PRIMARY KEY,
+      symbol TEXT NOT NULL,
+      title TEXT NOT NULL,
+      opportunity_id TEXT DEFAULT NULL,
+      executive_summary TEXT NOT NULL,
+      thesis TEXT NOT NULL DEFAULT '{}',
+      price_analysis TEXT NOT NULL DEFAULT '{}',
+      holder_analysis TEXT DEFAULT NULL,
+      options_analysis TEXT DEFAULT NULL,
+      news_analysis TEXT NOT NULL DEFAULT '{}',
+      risk_analysis TEXT NOT NULL DEFAULT '{}',
+      recommendation TEXT NOT NULL DEFAULT '{}',
+      historical_comparison TEXT DEFAULT NULL,
+      tags TEXT NOT NULL DEFAULT '[]',
+      status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN ('draft', 'published', 'archived')),
+      outcome TEXT DEFAULT NULL CHECK(outcome IN ('won', 'lost', 'pending', NULL)),
+      outcome_notes TEXT DEFAULT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS trade_journal (
+      id TEXT PRIMARY KEY,
+      symbol TEXT NOT NULL,
+      direction TEXT NOT NULL CHECK(direction IN ('long', 'short')),
+      entry_date TEXT NOT NULL,
+      entry_price REAL NOT NULL,
+      exit_date TEXT DEFAULT NULL,
+      exit_price REAL DEFAULT NULL,
+      quantity REAL NOT NULL,
+      pnl REAL DEFAULT NULL,
+      pnl_pct REAL DEFAULT NULL,
+      status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open', 'closed_win', 'closed_loss')),
+      entry_context TEXT NOT NULL DEFAULT '{}',
+      notes TEXT NOT NULL DEFAULT '',
+      tags TEXT NOT NULL DEFAULT '[]',
+      pattern_id TEXT DEFAULT NULL,
+      learned_at TEXT DEFAULT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT NULL,
+      FOREIGN KEY (pattern_id) REFERENCES trade_patterns(id) ON DELETE SET NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS trade_analysis_data (
+      id TEXT PRIMARY KEY,
+      trade_id TEXT NOT NULL,
+      symbol TEXT NOT NULL,
+      entry_date TEXT NOT NULL,
+      exit_date TEXT NOT NULL,
+      price_action TEXT NOT NULL DEFAULT '{}',
+      volume_profile TEXT NOT NULL DEFAULT '{}',
+      technicals TEXT NOT NULL DEFAULT '{}',
+      options_context TEXT DEFAULT NULL,
+      holder_context TEXT DEFAULT NULL,
+      news_context TEXT NOT NULL DEFAULT '{}',
+      macro_context TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (trade_id) REFERENCES trade_journal(id) ON DELETE CASCADE
+    );
+
+    -- AI Learning indexes
+    CREATE INDEX IF NOT EXISTS idx_trade_patterns_created ON trade_patterns(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_trade_patterns_used_count ON trade_patterns(used_count DESC);
+    CREATE INDEX IF NOT EXISTS idx_trade_patterns_live_win_rate ON trade_patterns(live_win_rate DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_pattern_matches_pattern ON pattern_matches(pattern_id);
+    CREATE INDEX IF NOT EXISTS idx_pattern_matches_symbol ON pattern_matches(symbol);
+    CREATE INDEX IF NOT EXISTS idx_pattern_matches_date ON pattern_matches(match_date DESC);
+    CREATE INDEX IF NOT EXISTS idx_pattern_matches_outcome ON pattern_matches(outcome);
+
+    CREATE INDEX IF NOT EXISTS idx_research_reports_symbol ON research_reports(symbol);
+    CREATE INDEX IF NOT EXISTS idx_research_reports_status ON research_reports(status);
+    CREATE INDEX IF NOT EXISTS idx_research_reports_outcome ON research_reports(outcome);
+    CREATE INDEX IF NOT EXISTS idx_research_reports_created ON research_reports(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_research_reports_opportunity ON research_reports(opportunity_id);
+
+    CREATE INDEX IF NOT EXISTS idx_trade_journal_symbol ON trade_journal(symbol);
+    CREATE INDEX IF NOT EXISTS idx_trade_journal_status ON trade_journal(status);
+    CREATE INDEX IF NOT EXISTS idx_trade_journal_direction ON trade_journal(direction);
+    CREATE INDEX IF NOT EXISTS idx_trade_journal_entry_date ON trade_journal(entry_date DESC);
+    CREATE INDEX IF NOT EXISTS idx_trade_journal_pattern ON trade_journal(pattern_id);
+
+    CREATE INDEX IF NOT EXISTS idx_trade_analysis_trade ON trade_analysis_data(trade_id);
+    CREATE INDEX IF NOT EXISTS idx_trade_analysis_symbol ON trade_analysis_data(symbol);
+
     -- News tables
     CREATE TABLE IF NOT EXISTS news_sources (
       id TEXT PRIMARY KEY,

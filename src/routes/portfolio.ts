@@ -2,6 +2,8 @@ import { Router, Request, Response } from 'express';
 import { alpacaTrading } from '../services/alpaca/trading';
 import { getDb } from '../db/schema';
 import { v4 } from '../services/opportunities/uuid';
+import { tradeJournalService } from '../services/portfolio/journal';
+import { aiLearnService } from '../services/ai/learn';
 
 const router = Router();
 
@@ -86,38 +88,177 @@ router.post('/order', async (req: Request, res: Response) => {
   }
 });
 
-// GET /api/portfolio/journal
-router.get('/journal', (_req: Request, res: Response) => {
+// Enhanced Trade Journal Routes
+
+// GET /api/portfolio/journal - all journal entries
+router.get('/journal', async (req: Request, res: Response) => {
   try {
-    const db = getDb();
-    const entries = db.prepare('SELECT * FROM trade_journal ORDER BY created_at DESC LIMIT 100').all();
-    res.json(entries);
+    const {
+      status,
+      symbol,
+      direction,
+      fromDate,
+      toDate,
+      hasPattern,
+      limit,
+      offset,
+    } = req.query;
+
+    const filters: any = {};
+    if (status) filters.status = status as string;
+    if (symbol) filters.symbol = symbol as string;
+    if (direction) filters.direction = direction as string;
+    if (fromDate) filters.fromDate = fromDate as string;
+    if (toDate) filters.toDate = toDate as string;
+    if (hasPattern !== undefined) filters.hasPattern = hasPattern === 'true';
+    if (limit) filters.limit = Number(limit);
+    if (offset) filters.offset = Number(offset);
+
+    const entries = await tradeJournalService.getTrades(filters);
+    res.json({ entries, total: entries.length });
   } catch (err) {
     console.error('[Portfolio] Journal error:', err);
     res.status(500).json({ error: 'Failed to fetch trade journal' });
   }
 });
 
-// POST /api/portfolio/journal/:id/learn
-router.post('/journal/:id/learn', async (req: Request, res: Response) => {
+// GET /api/portfolio/journal/:id - entry detail
+router.get('/journal/:id', async (req: Request, res: Response) => {
   try {
-    const { id } = req.params;
-    const db = getDb();
-    const entry = db.prepare('SELECT * FROM trade_journal WHERE id = ?').get(id) as Record<string, unknown> | undefined;
-
+    const id = req.params.id as string;
+    const entry = await tradeJournalService.getTrade(id);
+    
     if (!entry) {
       return res.status(404).json({ error: 'Journal entry not found' });
     }
+    
+    res.json(entry);
+  } catch (err) {
+    console.error('[Portfolio] Get journal entry error:', err);
+    res.status(500).json({ error: 'Failed to fetch journal entry' });
+  }
+});
 
-    // Stub — real implementation uses Norman Agent
-    const analysis = `AI analysis stub for ${entry.symbol} ${entry.side} trade. Norman Agent will provide pattern recognition, risk/reward analysis, and timing evaluation once integrated.`;
+// POST /api/portfolio/journal - create new trade entry
+router.post('/journal', async (req: Request, res: Response) => {
+  try {
+    const {
+      symbol,
+      direction,
+      entryDate,
+      entryPrice,
+      quantity,
+      thesis,
+      opportunityId,
+      reportId,
+      signals,
+      notes,
+      tags,
+    } = req.body;
 
-    db.prepare('UPDATE trade_journal SET ai_analysis = ? WHERE id = ?').run(analysis, id);
+    if (!symbol || !direction || !entryDate || !entryPrice || !quantity || !thesis) {
+      return res.status(400).json({ 
+        error: 'symbol, direction, entryDate, entryPrice, quantity, and thesis are required' 
+      });
+    }
 
-    res.json({ id, analysis });
+    if (!['long', 'short'].includes(direction)) {
+      return res.status(400).json({ error: 'direction must be "long" or "short"' });
+    }
+
+    const entry = await tradeJournalService.createTrade({
+      symbol: symbol.toUpperCase(),
+      direction,
+      entryDate,
+      entryPrice: Number(entryPrice),
+      quantity: Number(quantity),
+      thesis,
+      opportunityId,
+      reportId,
+      signals,
+      notes,
+      tags,
+    });
+
+    res.status(201).json(entry);
+  } catch (err) {
+    console.error('[Portfolio] Create journal entry error:', err);
+    res.status(500).json({ 
+      error: err instanceof Error ? err.message : 'Failed to create journal entry' 
+    });
+  }
+});
+
+// PUT /api/portfolio/journal/:id - update notes/tags
+router.put('/journal/:id', async (req: Request, res: Response) => {
+  try {
+    const id = req.params.id as string;
+    const { notes, tags } = req.body;
+
+    const updated = await tradeJournalService.updateTrade(id, { notes, tags });
+    
+    if (!updated) {
+      return res.status(404).json({ error: 'Journal entry not found' });
+    }
+
+    res.json({ success: true, notes, tags });
+  } catch (err) {
+    console.error('[Portfolio] Update journal entry error:', err);
+    res.status(500).json({ error: 'Failed to update journal entry' });
+  }
+});
+
+// PUT /api/portfolio/journal/:id/close - close a trade
+router.put('/journal/:id/close', async (req: Request, res: Response) => {
+  try {
+    const id = req.params.id as string;
+    const { exitPrice, exitDate } = req.body;
+
+    if (!exitPrice) {
+      return res.status(400).json({ error: 'exitPrice is required' });
+    }
+
+    const entry = await tradeJournalService.closeTrade(id, Number(exitPrice), exitDate);
+    res.json(entry);
+  } catch (err) {
+    console.error('[Portfolio] Close trade error:', err);
+    res.status(500).json({ 
+      error: err instanceof Error ? err.message : 'Failed to close trade' 
+    });
+  }
+});
+
+// GET /api/portfolio/journal/stats - win rate, avg P&L, best/worst, by direction
+router.get('/journal/stats', async (req: Request, res: Response) => {
+  try {
+    const { fromDate, toDate, symbol, direction } = req.query;
+
+    const filters: any = {};
+    if (fromDate) filters.fromDate = fromDate as string;
+    if (toDate) filters.toDate = toDate as string;
+    if (symbol) filters.symbol = symbol as string;
+    if (direction) filters.direction = direction as string;
+
+    const stats = await tradeJournalService.getTradeStats(filters);
+    res.json(stats);
+  } catch (err) {
+    console.error('[Portfolio] Journal stats error:', err);
+    res.status(500).json({ error: 'Failed to calculate trade statistics' });
+  }
+});
+
+// POST /api/portfolio/journal/:id/learn - trigger AI Learn on this trade
+router.post('/journal/:id/learn', async (req: Request, res: Response) => {
+  try {
+    const id = req.params.id as string;
+    
+    const pattern = await aiLearnService.analyzeTradeForPattern(id);
+    res.json({ success: true, pattern });
   } catch (err) {
     console.error('[Portfolio] Learn error:', err);
-    res.status(500).json({ error: 'Failed to analyze trade' });
+    res.status(500).json({ 
+      error: err instanceof Error ? err.message : 'Failed to analyze trade' 
+    });
   }
 });
 

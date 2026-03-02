@@ -22,6 +22,7 @@ import socialRoutes from './routes/social';
 import portfolioRoutes from './routes/portfolio';
 import opportunityRoutes from './routes/opportunities';
 import normanRoutes from './routes/norman';
+import aiRoutes from './routes/ai';
 
 const app = express();
 
@@ -63,6 +64,7 @@ app.use('/api/social', socialRoutes);
 app.use('/api/portfolio', portfolioRoutes);
 app.use('/api/opportunities', opportunityRoutes);
 app.use('/api/norman', normanRoutes);
+app.use('/api/ai', aiRoutes);
 
 // Health check
 app.get('/health', (_req, res) => {
