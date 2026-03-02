@@ -10,6 +10,7 @@ import { pollingManager } from './services/polling/manager';
 import { rssAggregator } from './services/news/rss-aggregator';
 import { redditScraper } from './services/social/reddit';
 import { socialTrending } from './services/social/trending';
+import { healthMetrics } from './services/health/metrics';
 
 // Routes
 import marketRoutes from './routes/market';
@@ -23,6 +24,8 @@ import portfolioRoutes from './routes/portfolio';
 import opportunityRoutes from './routes/opportunities';
 import normanRoutes from './routes/norman';
 import aiRoutes from './routes/ai';
+import searchRoutes from './routes/search';
+import exportRoutes from './routes/export';
 
 const app = express();
 
@@ -32,11 +35,15 @@ app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
-// Request logging
+// Request logging and metrics
 app.use((req, _res, next) => {
   const start = Date.now();
   _res.on('finish', () => {
     const duration = Date.now() - start;
+    const isError = _res.statusCode >= 400;
+    
+    healthMetrics.recordRequest(duration, isError);
+    
     console.log(`[${new Date().toISOString()}] ${req.method} ${req.path} ${_res.statusCode} ${duration}ms`);
   });
   next();
@@ -65,6 +72,8 @@ app.use('/api/portfolio', portfolioRoutes);
 app.use('/api/opportunities', opportunityRoutes);
 app.use('/api/norman', normanRoutes);
 app.use('/api/ai', aiRoutes);
+app.use('/api/search', searchRoutes);
+app.use('/api/export', exportRoutes);
 
 // Health check
 app.get('/health', (_req, res) => {
@@ -74,6 +83,18 @@ app.get('/health', (_req, res) => {
     timestamp: new Date().toISOString(),
     polling: pollingManager.getStats(),
   });
+});
+
+// Health metrics endpoint
+app.get('/health/metrics', (_req, res) => {
+  const metrics = healthMetrics.getMetrics();
+  res.json(healthMetrics.formatMetricsForDisplay(metrics));
+});
+
+// Raw health metrics (for monitoring systems)
+app.get('/health/metrics/raw', (_req, res) => {
+  const metrics = healthMetrics.getMetrics();
+  res.json(metrics);
 });
 
 // 404 handler

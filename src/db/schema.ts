@@ -7,8 +7,19 @@ let db: Database.Database;
 export function getDb(): Database.Database {
   if (!db) {
     db = new Database(path.resolve(config.db.path));
+    
+    // Enable WAL mode for better concurrent access
     db.pragma('journal_mode = WAL');
     db.pragma('foreign_keys = ON');
+    
+    // Performance optimizations
+    db.pragma('synchronous = NORMAL');
+    db.pragma('cache_size = -64000'); // 64MB cache
+    db.pragma('temp_store = memory');
+    db.pragma('mmap_size = 268435456'); // 256MB mmap
+    db.pragma('busy_timeout = 30000'); // 30 second busy timeout
+    
+    console.log('[Database] Initialized with WAL mode and performance optimizations');
     initSchema(db);
   }
   return db;
