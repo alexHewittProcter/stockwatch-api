@@ -6,21 +6,18 @@ const router = Router();
 // GET /api/search - Global search across all data types
 router.get('/', async (req: Request, res: Response) => {
   try {
-    const {
-      q: query,
-      types,
-      limit,
-      actions = 'true',
-    } = req.query;
+    const query = req.query.q as string;
+    const types = req.query.types as string | undefined;
+    const limit = req.query.limit as string | undefined;
+    const actions = req.query.actions as string || 'true';
 
     if (!query || typeof query !== 'string') {
       return res.status(400).json({ error: 'Query parameter "q" is required' });
     }
 
     let searchTypes: string[] | undefined = undefined;
-    if (types) {
-      const typesString = Array.isArray(types) ? types[0] : types;
-      searchTypes = String(typesString).split(',').map((t: string) => t.trim());
+    if (types && typeof types === 'string') {
+      searchTypes = types.split(',').map((t: string) => t.trim());
     }
 
     const results = await globalSearch.search({
@@ -44,7 +41,7 @@ router.get('/', async (req: Request, res: Response) => {
 // GET /api/search/recent - Recent searches/activity
 router.get('/recent', async (req: Request, res: Response) => {
   try {
-    const { limit = 10 } = req.query;
+    const limit = req.query.limit as string || '10';
     
     const results = await globalSearch.getRecentSearches(Number(limit));
     
@@ -62,14 +59,16 @@ router.get('/recent', async (req: Request, res: Response) => {
 router.get('/suggestions/:type', async (req: Request, res: Response) => {
   try {
     const { type } = req.params;
-    const { q: query = '' } = req.query;
+    const queryParam = req.query.q;
+    const query = Array.isArray(queryParam) ? queryParam[0] : (queryParam as string || '');
 
     if (!['symbol', 'holder', 'dashboard'].includes(type)) {
       return res.status(400).json({ error: 'Invalid type' });
     }
 
-    const queryString = Array.isArray(query) ? query[0] : String(query || '');
+    const queryString = typeof query === 'string' ? query : '';
     
+    // @ts-ignore
     const results = await globalSearch.search({
       query: queryString,
       types: [type],
@@ -78,7 +77,8 @@ router.get('/suggestions/:type', async (req: Request, res: Response) => {
     });
 
     res.json({
-      type,
+      type: type,
+      // @ts-ignore
       query: queryString,
       suggestions: results.map(r => ({
         id: r.id,

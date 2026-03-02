@@ -11,6 +11,8 @@ import { rssAggregator } from './services/news/rss-aggregator';
 import { redditScraper } from './services/social/reddit';
 import { socialTrending } from './services/social/trending';
 import { healthMetrics } from './services/health/metrics';
+import { autoTrader } from './services/ai/auto-trader';
+import { wireFeed } from './services/wire/feed';
 
 // Routes
 import marketRoutes from './routes/market';
@@ -26,6 +28,8 @@ import normanRoutes from './routes/norman';
 import aiRoutes from './routes/ai';
 import searchRoutes from './routes/search';
 import exportRoutes from './routes/export';
+import autotraderRoutes from './routes/autotrader';
+import wireRoutes from './routes/wire';
 
 const app = express();
 
@@ -74,6 +78,8 @@ app.use('/api/norman', normanRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/search', searchRoutes);
 app.use('/api/export', exportRoutes);
+app.use('/api/autotrader', autotraderRoutes);
+app.use('/api/wire', wireRoutes);
 
 // Health check
 app.get('/health', (_req, res) => {
@@ -173,6 +179,12 @@ async function startServer() {
   // WebSocket server
   createWebSocketServer(server);
 
+  // Start wire feed
+  wireFeed.startFeed();
+
+  // Auto-trader can be started later via API
+  // autoTrader.startAutoTrader();
+
   // Adaptive polling
   pollingManager.start();
 
@@ -182,6 +194,9 @@ async function startServer() {
 ║         StockWatch API v1.0.0             ║
 ║   http://localhost:${config.port}                  ║
 ║   WebSocket: ws://localhost:${config.port}/ws/prices ║
+║   Wire Feed: ws://localhost:${config.port}/ws/wire   ║
+║   🤖 Auto-Trader Ready                    ║
+║   📡 Wire Feed Active                     ║
 ╚═══════════════════════════════════════════╝
     `);
   });
