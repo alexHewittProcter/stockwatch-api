@@ -1,137 +1,390 @@
 import Parser from 'rss-parser';
-import { DEFAULT_RSS_SOURCES, RSSSource } from './sources';
+import { getDb } from '../../db/schema';
+import { v4 } from '../opportunities/uuid';
+import { NewsSource, NewsArticle } from './types';
+import { tickerExtractor } from './ticker-extractor';
+import { sentimentScorer } from './sentiment';
 
-export interface FeedArticle {
-  id: string;
-  title: string;
-  link: string;
-  summary: string;
-  source: string;
-  category: string;
-  publishedAt: string;
-  tickers: string[];
-  sentiment: number; // -1 to 1
-}
+const parser = new Parser({
+  timeout: 30000,
+  headers: {
+    'User-Agent': 'StockWatch/1.0 News Aggregator (basil.hewittprocter@gmail.com)',
+  },
+});
 
-// Common ticker patterns — used for extraction from text
-const TICKER_PATTERN = /\b([A-Z]{1,5})\b/g;
-const KNOWN_NON_TICKERS = new Set([
-  'THE', 'AND', 'FOR', 'ARE', 'BUT', 'NOT', 'YOU', 'ALL', 'CAN', 'HER', 'WAS', 'ONE',
-  'OUR', 'OUT', 'HAS', 'HIS', 'HOW', 'ITS', 'MAY', 'NEW', 'NOW', 'OLD', 'SEE', 'WAY',
-  'WHO', 'DID', 'GET', 'LET', 'SAY', 'SHE', 'TOO', 'USE', 'CEO', 'CFO', 'CTO', 'IPO',
-  'GDP', 'CPI', 'FED', 'SEC', 'ETF', 'NYSE', 'FDA', 'API', 'USA', 'USD', 'EUR', 'GBP',
-  'RSS', 'AI', 'CEO', 'US', 'UK', 'EU',
-]);
+export class RSSAggregatorService {
+  private readonly defaultSources: Omit<NewsSource, 'id'>[] = [
+    { name: 'Morning Brew', url: 'https://www.morningbrew.com/daily/rss', enabled: true },
+    { name: 'Reuters Business', url: 'http://feeds.reuters.com/reuters/businessNews', enabled: true },
+    { name: 'MarketWatch', url: 'http://feeds.marketwatch.com/marketwatch/topstories', enabled: true },
+    { name: 'Yahoo Finance', url: 'https://finance.yahoo.com/news/rssindex', enabled: true },
+    { name: 'Seeking Alpha', url: 'https://seekingalpha.com/market_currents.xml', enabled: true },
+    { name: 'The Motley Fool', url: 'https://www.fool.com/feeds/index.aspx', enabled: true },
+    { name: 'Investor\'s Business Daily', url: 'https://www.investors.com/feed/', enabled: true },
+    { name: 'Barron\'s', url: 'https://www.barrons.com/feed', enabled: true },
+    // Note: Some feeds may require special handling or headers
+  ];
 
-const BULLISH_WORDS = ['surge', 'rally', 'gain', 'rise', 'up', 'bull', 'growth', 'profit', 'beat', 'record', 'high', 'upgrade', 'buy', 'outperform', 'strong'];
-const BEARISH_WORDS = ['drop', 'fall', 'decline', 'loss', 'down', 'bear', 'crash', 'sell', 'miss', 'low', 'cut', 'downgrade', 'weak', 'risk', 'fear'];
-
-class RSSAggregator {
-  private parser: Parser;
-  private sources: RSSSource[];
-  private cachedArticles: FeedArticle[] = [];
-  private lastFetch = 0;
-  private readonly cacheDuration = 5 * 60 * 1000; // 5 min
-
-  constructor() {
-    this.parser = new Parser({
-      timeout: 10000,
-      headers: {
-        'User-Agent': 'StockWatch/1.0',
-      },
-    });
-    this.sources = [...DEFAULT_RSS_SOURCES];
+  /**
+   * Initialize default sources if none exist
+   */
+  async initializeDefaultSources(): Promise<void> {
+    const db = getDb();
+    const existingSources = db.prepare('SELECT COUNT(*) as count FROM news_sources').get() as { count: number };
+    
+    if (existingSources.count === 0) {
+      for (const source of this.defaultSources) {
+        const id = v4();
+        db.prepare(`
+          INSERT INTO news_sources (id, name, url, enabled, created_at) 
+          VALUES (?, ?, ?, ?, ?)
+        `).run(id, source.name, source.url, source.enabled ? 1 : 0, new Date().toISOString());
+      }
+      console.log('[RSS] Initialized default news sources');
+    }
   }
 
-  async fetchAll(): Promise<FeedArticle[]> {
-    if (Date.now() - this.lastFetch < this.cacheDuration && this.cachedArticles.length > 0) {
-      return this.cachedArticles;
+  /**
+   * Get all configured sources
+   */
+  getSources(): NewsSource[] {
+    const db = getDb();
+    const rows = db.prepare(`
+      SELECT * FROM news_sources 
+      ORDER BY enabled DESC, name ASC
+    `).all();
+
+    return (rows as any[]).map(row => ({
+      id: row.id,
+      name: row.name,
+      url: row.url,
+      enabled: Boolean(row.enabled),
+      lastChecked: row.last_checked,
+      articleCount: row.article_count || 0,
+    }));
+  }
+
+  /**
+   * Add a new RSS source
+   */
+  async addSource(name: string, url: string): Promise<NewsSource> {
+    // Validate RSS feed by trying to fetch it
+    try {
+      await parser.parseURL(url);
+    } catch (error) {
+      throw new Error(`Invalid RSS feed: ${error}`);
     }
 
+    const db = getDb();
+    const id = v4();
+    
+    db.prepare(`
+      INSERT INTO news_sources (id, name, url, enabled, created_at) 
+      VALUES (?, ?, ?, ?, ?)
+    `).run(id, name, url, 1, new Date().toISOString());
+
+    return {
+      id,
+      name,
+      url,
+      enabled: true,
+      articleCount: 0,
+    };
+  }
+
+  /**
+   * Remove a source
+   */
+  removeSource(id: string): void {
+    const db = getDb();
+    db.prepare('DELETE FROM news_sources WHERE id = ?').run(id);
+    db.prepare('DELETE FROM news_articles WHERE source_id = ?').run(id);
+  }
+
+  /**
+   * Fetch articles from all enabled sources
+   */
+  async fetchAllSources(): Promise<void> {
+    const sources = this.getSources().filter(s => s.enabled);
     const results = await Promise.allSettled(
-      this.sources.map(source => this.fetchSource(source)),
+      sources.map(source => this.fetchSource(source))
     );
 
-    const articles: FeedArticle[] = [];
-    for (const result of results) {
+    let totalFetched = 0;
+    let totalErrors = 0;
+
+    for (let i = 0; i < results.length; i++) {
+      const result = results[i];
+      const source = sources[i];
+      
       if (result.status === 'fulfilled') {
-        articles.push(...result.value);
+        const count = result.value;
+        totalFetched += count;
+        console.log(`[RSS] ${source.name}: ${count} new articles`);
+      } else {
+        totalErrors++;
+        console.error(`[RSS] ${source.name} failed:`, result.reason);
       }
     }
 
-    // Sort by date, newest first
-    articles.sort((a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime());
-
-    this.cachedArticles = articles;
-    this.lastFetch = Date.now();
-    return articles;
+    console.log(`[RSS] Fetch complete: ${totalFetched} new articles, ${totalErrors} errors`);
   }
 
-  async fetchByTab(tab: string): Promise<FeedArticle[]> {
-    const all = await this.fetchAll();
-
-    switch (tab) {
-      case 'trending':
-        return all.slice(0, 50);
-      case 'opportunities':
-        return all.filter(a => Math.abs(a.sentiment) > 0.3).slice(0, 30);
-      case 'social':
-        return []; // Social feed comes from social service
-      case 'foryou':
-      default:
-        return all.slice(0, 30);
-    }
-  }
-
-  addSource(source: RSSSource): void {
-    this.sources.push(source);
-    this.lastFetch = 0; // invalidate cache
-  }
-
-  getSources(): RSSSource[] {
-    return this.sources;
-  }
-
-  private async fetchSource(source: RSSSource): Promise<FeedArticle[]> {
+  /**
+   * Fetch articles from a single source
+   */
+  async fetchSource(source: NewsSource): Promise<number> {
     try {
-      const feed = await this.parser.parseURL(source.url);
-      return (feed.items ?? []).map(item => {
-        const text = `${item.title ?? ''} ${item.contentSnippet ?? ''}`;
-        return {
-          id: item.guid || item.link || `${source.name}-${item.title}`,
-          title: item.title ?? '',
-          link: item.link ?? '',
-          summary: (item.contentSnippet ?? '').slice(0, 500),
-          source: source.name,
-          category: source.category,
-          publishedAt: item.isoDate ?? item.pubDate ?? new Date().toISOString(),
-          tickers: this.extractTickers(text),
-          sentiment: this.scoreSentiment(text),
+      const feed = await parser.parseURL(source.url);
+      const db = getDb();
+      let newArticles = 0;
+
+      // Update last checked timestamp
+      db.prepare(`
+        UPDATE news_sources 
+        SET last_checked = ? 
+        WHERE id = ?
+      `).run(new Date().toISOString(), source.id);
+
+      for (const item of feed.items.slice(0, 20)) { // Limit to 20 most recent
+        if (!item.link || !item.title) continue;
+
+        // Check if article already exists
+        const existing = db.prepare(`
+          SELECT id FROM news_articles WHERE url = ?
+        `).get(item.link);
+
+        if (existing) continue;
+
+        // Extract tickers from title and content
+        const content = item.contentSnippet || item.content || '';
+        const fullText = `${item.title} ${content}`;
+        const tickers = tickerExtractor.extract(fullText);
+        
+        // Score sentiment
+        const sentiment = sentimentScorer.score(fullText);
+
+        // Create article
+        const articleId = v4();
+        const article: NewsArticle = {
+          id: articleId,
+          url: item.link,
+          title: item.title,
+          content: item.content || item.contentSnippet || '',
+          contentSnippet: this.createSnippet(item.contentSnippet || item.content || ''),
+          publishedAt: item.pubDate ? new Date(item.pubDate).toISOString() : new Date().toISOString(),
+          source: source.id,
+          sourceName: source.name,
+          tickers,
+          sentiment,
+          author: item.creator || item.author,
+          imageUrl: this.extractImageUrl(item),
         };
-      });
-    } catch {
-      return [];
+
+        // Store in database
+        db.prepare(`
+          INSERT INTO news_articles (
+            id, url, title, content, content_snippet, published_at, 
+            source_id, source_name, tickers, sentiment_score, 
+            sentiment_label, author, image_url, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          article.id,
+          article.url,
+          article.title,
+          article.content,
+          article.contentSnippet,
+          article.publishedAt,
+          article.source,
+          article.sourceName,
+          JSON.stringify(article.tickers),
+          article.sentiment.score,
+          article.sentiment.label,
+          article.author,
+          article.imageUrl,
+          new Date().toISOString()
+        );
+
+        newArticles++;
+      }
+
+      // Update article count for source
+      db.prepare(`
+        UPDATE news_sources 
+        SET article_count = (
+          SELECT COUNT(*) FROM news_articles WHERE source_id = ?
+        ) 
+        WHERE id = ?
+      `).run(source.id, source.id);
+
+      return newArticles;
+    } catch (error) {
+      console.error(`[RSS] Error fetching ${source.name}:`, error);
+      throw error;
     }
   }
 
-  private extractTickers(text: string): string[] {
-    const matches = text.match(TICKER_PATTERN) ?? [];
-    return [...new Set(
-      matches.filter(m => m.length >= 2 && m.length <= 5 && !KNOWN_NON_TICKERS.has(m)),
-    )].slice(0, 10);
+  /**
+   * Get recent articles with optional filtering
+   */
+  getArticles(options: {
+    limit?: number;
+    offset?: number;
+    symbols?: string[];
+    sources?: string[];
+    sentiment?: 'bullish' | 'bearish' | 'neutral';
+    since?: string;
+  } = {}): NewsArticle[] {
+    const {
+      limit = 50,
+      offset = 0,
+      symbols,
+      sources,
+      sentiment,
+      since,
+    } = options;
+
+    const db = getDb();
+    let query = 'SELECT * FROM news_articles WHERE 1=1';
+    const params: any[] = [];
+
+    if (since) {
+      query += ' AND published_at >= ?';
+      params.push(since);
+    }
+
+    if (sources && sources.length > 0) {
+      const placeholders = sources.map(() => '?').join(',');
+      query += ` AND source_name IN (${placeholders})`;
+      params.push(...sources);
+    }
+
+    if (sentiment) {
+      query += ' AND sentiment_label = ?';
+      params.push(sentiment);
+    }
+
+    if (symbols && symbols.length > 0) {
+      // Filter by ticker mentions
+      const tickerConditions = symbols.map(() => 'tickers LIKE ?').join(' OR ');
+      query += ` AND (${tickerConditions})`;
+      params.push(...symbols.map(symbol => `%"ticker":"${symbol}"%`));
+    }
+
+    query += ' ORDER BY published_at DESC LIMIT ? OFFSET ?';
+    params.push(limit, offset);
+
+    const rows = db.prepare(query).all(...params);
+
+    return (rows as any[]).map(row => ({
+      id: row.id,
+      url: row.url,
+      title: row.title,
+      content: row.content,
+      contentSnippet: row.content_snippet,
+      publishedAt: row.published_at,
+      source: row.source_id,
+      sourceName: row.source_name,
+      tickers: JSON.parse(row.tickers || '[]'),
+      sentiment: {
+        score: row.sentiment_score,
+        label: row.sentiment_label,
+        confidence: 0.8, // Default confidence
+        breakdown: { positive: 0, negative: 0, neutral: 0 },
+      },
+      author: row.author,
+      imageUrl: row.image_url,
+    }));
   }
 
-  private scoreSentiment(text: string): number {
-    const lower = text.toLowerCase();
-    let score = 0;
-    for (const word of BULLISH_WORDS) {
-      if (lower.includes(word)) score += 0.1;
+  /**
+   * Get article by ID
+   */
+  getArticleById(id: string): NewsArticle | null {
+    const db = getDb();
+    const row = db.prepare('SELECT * FROM news_articles WHERE id = ?').get(id);
+    
+    if (!row) return null;
+
+    const article = row as any;
+    return {
+      id: article.id,
+      url: article.url,
+      title: article.title,
+      content: article.content,
+      contentSnippet: article.content_snippet,
+      publishedAt: article.published_at,
+      source: article.source_id,
+      sourceName: article.source_name,
+      tickers: JSON.parse(article.tickers || '[]'),
+      sentiment: {
+        score: article.sentiment_score,
+        label: article.sentiment_label,
+        confidence: 0.8,
+        breakdown: { positive: 0, negative: 0, neutral: 0 },
+      },
+      author: article.author,
+      imageUrl: article.image_url,
+    };
+  }
+
+  /**
+   * Clean up old articles (keep last 30 days)
+   */
+  cleanupOldArticles(): number {
+    const db = getDb();
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - 30);
+    
+    const result = db.prepare(`
+      DELETE FROM news_articles 
+      WHERE published_at < ?
+    `).run(cutoff.toISOString());
+
+    return result.changes;
+  }
+
+  /**
+   * Create content snippet
+   */
+  private createSnippet(content: string, maxLength: number = 200): string {
+    const plainText = content.replace(/<[^>]*>/g, '').trim();
+    if (plainText.length <= maxLength) return plainText;
+    
+    const truncated = plainText.substring(0, maxLength);
+    const lastSpace = truncated.lastIndexOf(' ');
+    
+    return lastSpace > maxLength * 0.8 
+      ? truncated.substring(0, lastSpace) + '...'
+      : truncated + '...';
+  }
+
+  /**
+   * Extract image URL from RSS item
+   */
+  private extractImageUrl(item: any): string | undefined {
+    // Try different RSS fields for images
+    if (item.enclosure?.url && item.enclosure.type?.startsWith('image/')) {
+      return item.enclosure.url;
     }
-    for (const word of BEARISH_WORDS) {
-      if (lower.includes(word)) score -= 0.1;
+    
+    if (item['media:thumbnail']?.['$']?.url) {
+      return item['media:thumbnail']['$'].url;
     }
-    return Math.max(-1, Math.min(1, score));
+    
+    if (item['media:content']?.[0]?.['$']?.url) {
+      return item['media:content'][0]['$'].url;
+    }
+    
+    // Extract from content
+    const content = item.content || item.contentSnippet || '';
+    const imgMatch = content.match(/<img[^>]+src="([^"]+)"/);
+    if (imgMatch) {
+      return imgMatch[1];
+    }
+
+    return undefined;
   }
 }
 
-export const rssAggregator = new RSSAggregator();
+export const rssAggregator = new RSSAggregatorService();

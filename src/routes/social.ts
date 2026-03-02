@@ -1,48 +1,26 @@
 import { Router, Request, Response } from 'express';
-import { getAllSubredditPosts, getSubredditPosts, countTickerMentions, getTickerSentiment } from '../services/social/reddit';
-import { getBizCatalog, countChanTickerMentions } from '../services/social/fourchan';
+import { redditScraper } from '../services/social/reddit';
+import { socialTrending } from '../services/social/trending';
 
 const router = Router();
 
 // GET /api/social/trending
-router.get('/trending', async (_req: Request, res: Response) => {
+router.get('/trending', async (req: Request, res: Response) => {
   try {
-    const [redditPosts, chanPosts] = await Promise.all([
-      getAllSubredditPosts(),
-      getBizCatalog(),
-    ]);
-
-    const redditMentions = countTickerMentions(redditPosts);
-    const chanMentions = countChanTickerMentions(chanPosts);
-
-    // Combine mentions
-    const combined = new Map<string, { reddit: number; chan: number; total: number }>();
-
-    for (const [ticker, count] of redditMentions) {
-      const existing = combined.get(ticker) || { reddit: 0, chan: 0, total: 0 };
-      existing.reddit = count;
-      existing.total += count;
-      combined.set(ticker, existing);
+    const period = (req.query.period as '1h' | '4h' | '24h' | '7d') || '24h';
+    
+    // Try to get cached trending data first
+    let trending = socialTrending.getCachedTrending(period);
+    
+    // If no cached data or data is stale, recalculate
+    if (trending.length === 0) {
+      trending = await socialTrending.calculateTrending(period);
     }
-
-    for (const [ticker, count] of chanMentions) {
-      const existing = combined.get(ticker) || { reddit: 0, chan: 0, total: 0 };
-      existing.chan = count;
-      existing.total += count;
-      combined.set(ticker, existing);
-    }
-
-    // Sort by total mentions
-    const trending = Array.from(combined.entries())
-      .map(([ticker, counts]) => ({ ticker, ...counts }))
-      .sort((a, b) => b.total - a.total)
-      .slice(0, 25);
 
     res.json({
+      period,
       trending,
-      redditPostCount: redditPosts.length,
-      chanPostCount: chanPosts.length,
-      updatedAt: new Date().toISOString(),
+      timestamp: new Date().toISOString(),
     });
   } catch (err) {
     console.error('[Social] Trending error:', err);
@@ -54,16 +32,47 @@ router.get('/trending', async (_req: Request, res: Response) => {
 router.get('/sentiment/:symbol', async (req: Request, res: Response) => {
   try {
     const symbol = req.params.symbol as string;
-    const redditPosts = await getAllSubredditPosts();
-    const sentiment = getTickerSentiment(redditPosts, symbol);
+    const period = (req.query.period as '1h' | '4h' | '24h' | '7d') || '24h';
 
-    res.json({
-      symbol: symbol.toUpperCase(),
-      ...sentiment,
-    });
+    const sentimentData = socialTrending.getTickerSentimentAnalysis(symbol, period);
+    res.json(sentimentData);
   } catch (err) {
     console.error('[Social] Sentiment error:', err);
-    res.status(500).json({ error: 'Failed to fetch sentiment' });
+    res.status(500).json({ error: 'Failed to fetch sentiment data' });
+  }
+});
+
+// GET /api/social/mentions/:symbol
+router.get('/mentions/:symbol', async (req: Request, res: Response) => {
+  try {
+    const symbol = req.params.symbol as string;
+    const hours = parseInt(req.query.hours as string) || 24;
+
+    const mentionStats = redditScraper.getTickerMentionStats(symbol, hours);
+    res.json({
+      symbol,
+      hours,
+      ...mentionStats,
+    });
+  } catch (err) {
+    console.error('[Social] Mentions error:', err);
+    res.status(500).json({ error: 'Failed to fetch mention data' });
+  }
+});
+
+// GET /api/social/reddit/hot
+router.get('/reddit/hot', async (req: Request, res: Response) => {
+  try {
+    const limit = parseInt(req.query.limit as string) || 100;
+    const posts = redditScraper.getHotPosts(limit);
+    
+    res.json({
+      posts,
+      total: posts.length,
+    });
+  } catch (err) {
+    console.error('[Social] Reddit hot error:', err);
+    res.status(500).json({ error: 'Failed to fetch hot Reddit posts' });
   }
 });
 
@@ -71,26 +80,106 @@ router.get('/sentiment/:symbol', async (req: Request, res: Response) => {
 router.get('/reddit/:subreddit', async (req: Request, res: Response) => {
   try {
     const subreddit = req.params.subreddit as string;
-    const sort = Array.isArray(req.query.sort) ? req.query.sort[0] as string : typeof req.query.sort === 'string' ? req.query.sort : 'hot';
-    const limitParam = Array.isArray(req.query.limit) ? req.query.limit[0] : req.query.limit;
-    const limit = parseInt(limitParam as string) || 25;
+    const limit = parseInt(req.query.limit as string) || 50;
 
-    const posts = await getSubredditPosts(subreddit, sort, limit);
-    res.json(posts);
+    // Validate subreddit is in our tracked list
+    const trackedSubreddits = redditScraper.getTrackedSubreddits();
+    if (!trackedSubreddits.includes(subreddit)) {
+      return res.status(400).json({ error: 'Subreddit not tracked' });
+    }
+
+    const posts = redditScraper.getSubredditPosts(subreddit, limit);
+    
+    res.json({
+      subreddit,
+      posts,
+      total: posts.length,
+    });
   } catch (err) {
-    console.error('[Social] Reddit error:', err);
-    res.status(500).json({ error: 'Failed to fetch reddit posts' });
+    console.error('[Social] Subreddit error:', err);
+    res.status(500).json({ error: 'Failed to fetch subreddit posts' });
   }
 });
 
-// GET /api/social/4chan
-router.get('/4chan', async (_req: Request, res: Response) => {
+// GET /api/social/hype
+router.get('/hype', async (req: Request, res: Response) => {
   try {
-    const posts = await getBizCatalog();
-    res.json(posts);
+    const hours = parseInt(req.query.hours as string) || 24;
+    const alerts = socialTrending.getRecentHypeAlerts(hours);
+    
+    res.json({
+      alerts,
+      total: alerts.length,
+      hours,
+    });
   } catch (err) {
-    console.error('[Social] 4chan error:', err);
-    res.status(500).json({ error: 'Failed to fetch 4chan posts' });
+    console.error('[Social] Hype error:', err);
+    res.status(500).json({ error: 'Failed to fetch hype alerts' });
+  }
+});
+
+// GET /api/social/posts/:symbol
+router.get('/posts/:symbol', async (req: Request, res: Response) => {
+  try {
+    const symbol = req.params.symbol as string;
+    const hours = parseInt(req.query.hours as string) || 24;
+    const limit = parseInt(req.query.limit as string) || 50;
+
+    const posts = redditScraper.getTickerPosts(symbol, hours).slice(0, limit);
+    
+    res.json({
+      symbol,
+      hours,
+      posts,
+      total: posts.length,
+    });
+  } catch (err) {
+    console.error('[Social] Symbol posts error:', err);
+    res.status(500).json({ error: 'Failed to fetch symbol posts' });
+  }
+});
+
+// GET /api/social/subreddits
+router.get('/subreddits', async (req: Request, res: Response) => {
+  try {
+    const subreddits = redditScraper.getTrackedSubreddits();
+    res.json({ subreddits });
+  } catch (err) {
+    console.error('[Social] Subreddits error:', err);
+    res.status(500).json({ error: 'Failed to fetch subreddits' });
+  }
+});
+
+// POST /api/social/detect-hype
+router.post('/detect-hype', async (req: Request, res: Response) => {
+  try {
+    const alerts = await socialTrending.detectHypeAlerts();
+    res.json({
+      alerts,
+      detected: alerts.length,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error('[Social] Detect hype error:', err);
+    res.status(500).json({ error: 'Failed to detect hype alerts' });
+  }
+});
+
+// POST /api/social/calculate-trending
+router.post('/calculate-trending', async (req: Request, res: Response) => {
+  try {
+    const period = (req.body.period as '1h' | '4h' | '24h' | '7d') || '24h';
+    const trending = await socialTrending.calculateTrending(period);
+    
+    res.json({
+      period,
+      trending,
+      calculated: trending.length,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error('[Social] Calculate trending error:', err);
+    res.status(500).json({ error: 'Failed to calculate trending' });
   }
 });
 

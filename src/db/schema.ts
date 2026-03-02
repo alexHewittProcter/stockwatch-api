@@ -226,6 +226,108 @@ function initSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_pcr_history_symbol_date ON pcr_history(symbol, date);
     CREATE INDEX IF NOT EXISTS idx_unusual_activity_symbol_detected ON unusual_activity(symbol, detected_at);
     CREATE INDEX IF NOT EXISTS idx_unusual_activity_score ON unusual_activity(score DESC);
+
+    -- News tables
+    CREATE TABLE IF NOT EXISTS news_sources (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      url TEXT NOT NULL UNIQUE,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      last_checked TEXT DEFAULT NULL,
+      article_count INTEGER DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS news_articles (
+      id TEXT PRIMARY KEY,
+      url TEXT NOT NULL UNIQUE,
+      title TEXT NOT NULL,
+      content TEXT DEFAULT '',
+      content_snippet TEXT DEFAULT '',
+      published_at TEXT NOT NULL,
+      source_id TEXT NOT NULL,
+      source_name TEXT NOT NULL,
+      tickers TEXT DEFAULT '[]',
+      sentiment_score REAL DEFAULT 0,
+      sentiment_label TEXT DEFAULT 'neutral',
+      author TEXT DEFAULT NULL,
+      image_url TEXT DEFAULT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    -- Social posts tables
+    CREATE TABLE IF NOT EXISTS social_posts (
+      id TEXT PRIMARY KEY,
+      platform TEXT NOT NULL CHECK(platform IN ('reddit', 'fourchan', 'twitter')),
+      source TEXT NOT NULL,
+      external_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      content TEXT DEFAULT '',
+      author TEXT DEFAULT '',
+      score INTEGER DEFAULT 0,
+      comment_count INTEGER DEFAULT 0,
+      published_at TEXT NOT NULL,
+      url TEXT DEFAULT '',
+      tickers TEXT DEFAULT '[]',
+      sentiment_score REAL DEFAULT 0,
+      sentiment_label TEXT DEFAULT 'neutral',
+      is_filtered INTEGER DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(platform, external_id)
+    );
+
+    -- Social mentions aggregation
+    CREATE TABLE IF NOT EXISTS social_mentions (
+      id TEXT PRIMARY KEY,
+      ticker TEXT NOT NULL,
+      platform TEXT NOT NULL,
+      hour_bucket TEXT NOT NULL,
+      mentions INTEGER DEFAULT 0,
+      total_score INTEGER DEFAULT 0,
+      avg_sentiment REAL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(ticker, platform, hour_bucket)
+    );
+
+    -- Trending data
+    CREATE TABLE IF NOT EXISTS trending_tickers (
+      id TEXT PRIMARY KEY,
+      ticker TEXT NOT NULL,
+      period TEXT NOT NULL,
+      mentions INTEGER DEFAULT 0,
+      mentions_change INTEGER DEFAULT 0,
+      mentions_change_percent REAL DEFAULT 0,
+      sentiment REAL DEFAULT 0,
+      trending_score REAL DEFAULT 0,
+      sources TEXT DEFAULT '{}',
+      calculated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(ticker, period, calculated_at)
+    );
+
+    -- Hype alerts
+    CREATE TABLE IF NOT EXISTS hype_alerts (
+      id TEXT PRIMARY KEY,
+      ticker TEXT NOT NULL,
+      mentions INTEGER NOT NULL,
+      baseline INTEGER NOT NULL,
+      multiplier REAL NOT NULL,
+      confidence REAL NOT NULL,
+      platforms TEXT DEFAULT '[]',
+      detected_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    -- News indexes
+    CREATE INDEX IF NOT EXISTS idx_news_articles_published ON news_articles(published_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_news_articles_source ON news_articles(source_id);
+    CREATE INDEX IF NOT EXISTS idx_news_articles_sentiment ON news_articles(sentiment_label);
+    CREATE INDEX IF NOT EXISTS idx_news_articles_tickers ON news_articles(tickers);
+
+    -- Social indexes
+    CREATE INDEX IF NOT EXISTS idx_social_posts_platform_published ON social_posts(platform, published_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_social_posts_source ON social_posts(source);
+    CREATE INDEX IF NOT EXISTS idx_social_posts_tickers ON social_posts(tickers);
+    CREATE INDEX IF NOT EXISTS idx_social_mentions_ticker_hour ON social_mentions(ticker, hour_bucket);
+    CREATE INDEX IF NOT EXISTS idx_trending_tickers_period ON trending_tickers(period, calculated_at DESC);
   `);
 
   // Add columns to tracked_holders if they don't exist

@@ -7,6 +7,9 @@ import { config } from './config';
 import { getDb, closeDb } from './db/schema';
 import { createWebSocketServer } from './websocket/server';
 import { pollingManager } from './services/polling/manager';
+import { rssAggregator } from './services/news/rss-aggregator';
+import { redditScraper } from './services/social/reddit';
+import { socialTrending } from './services/social/trending';
 
 // Routes
 import marketRoutes from './routes/market';
@@ -82,28 +85,86 @@ app.use((err: Error, _req: express.Request, res: express.Response, _next: expres
   res.status(500).json({ error: 'Internal server error' });
 });
 
+// --- Initialize News Services ---
+
+async function initializeNewsServices() {
+  try {
+    // Initialize default RSS sources
+    await rssAggregator.initializeDefaultSources();
+    
+    // Set up periodic fetching
+    setInterval(async () => {
+      try {
+        await rssAggregator.fetchAllSources();
+      } catch (error) {
+        console.error('[News] RSS fetch error:', error);
+      }
+    }, 10 * 60 * 1000); // Every 10 minutes
+
+    setInterval(async () => {
+      try {
+        await redditScraper.scrapeAll();
+      } catch (error) {
+        console.error('[Social] Reddit scrape error:', error);
+      }
+    }, 15 * 60 * 1000); // Every 15 minutes
+
+    setInterval(async () => {
+      try {
+        await socialTrending.calculateTrending('24h');
+        await socialTrending.detectHypeAlerts();
+      } catch (error) {
+        console.error('[Social] Trending calculation error:', error);
+      }
+    }, 30 * 60 * 1000); // Every 30 minutes
+
+    // Initial fetch (delayed to allow server startup)
+    setTimeout(async () => {
+      try {
+        console.log('[News] Starting initial RSS fetch...');
+        await rssAggregator.fetchAllSources();
+        console.log('[Social] Starting initial Reddit scrape...');
+        await redditScraper.scrapeAll();
+      } catch (error) {
+        console.error('[Init] Initial fetch error:', error);
+      }
+    }, 5000); // Wait 5 seconds after startup
+
+    console.log('[News] News services initialized');
+  } catch (error) {
+    console.error('[News] Failed to initialize news services:', error);
+  }
+}
+
 // --- Start ---
 
 const server = createServer(app);
 
-// Initialize database
-getDb();
+async function startServer() {
+  // Initialize database
+  getDb();
 
-// WebSocket server
-createWebSocketServer(server);
+  // Initialize news services
+  await initializeNewsServices();
 
-// Adaptive polling
-pollingManager.start();
+  // WebSocket server
+  createWebSocketServer(server);
 
-server.listen(config.port, () => {
-  console.log(`
+  // Adaptive polling
+  pollingManager.start();
+
+  server.listen(config.port, () => {
+    console.log(`
 ╔═══════════════════════════════════════════╗
 ║         StockWatch API v1.0.0             ║
 ║   http://localhost:${config.port}                  ║
 ║   WebSocket: ws://localhost:${config.port}/ws/prices ║
 ╚═══════════════════════════════════════════╝
-  `);
-});
+    `);
+  });
+}
+
+startServer().catch(console.error);
 
 // Graceful shutdown
 const shutdown = () => {
