@@ -169,6 +169,50 @@ function initSchema(db: Database.Database): void {
       last_updated TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
+    -- Options tables for volatility intelligence
+    CREATE TABLE IF NOT EXISTS cached_options_chains (
+      symbol TEXT PRIMARY KEY,
+      data TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS iv_history (
+      id TEXT PRIMARY KEY,
+      symbol TEXT NOT NULL,
+      date TEXT NOT NULL,
+      iv REAL NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(symbol, date)
+    );
+
+    CREATE TABLE IF NOT EXISTS pcr_history (
+      id TEXT PRIMARY KEY,
+      symbol TEXT NOT NULL,
+      date TEXT NOT NULL,
+      ratio REAL NOT NULL,
+      put_volume INTEGER NOT NULL DEFAULT 0,
+      call_volume INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(symbol, date)
+    );
+
+    CREATE TABLE IF NOT EXISTS unusual_activity (
+      id TEXT PRIMARY KEY,
+      symbol TEXT NOT NULL,
+      contract_type TEXT NOT NULL CHECK(contract_type IN ('call', 'put')),
+      strike REAL NOT NULL,
+      expiry TEXT NOT NULL,
+      volume INTEGER NOT NULL,
+      open_interest INTEGER NOT NULL,
+      volume_oi_ratio REAL NOT NULL,
+      notional_value REAL NOT NULL,
+      score REAL NOT NULL,
+      sentiment TEXT NOT NULL CHECK(sentiment IN ('bullish', 'bearish', 'neutral')),
+      classification TEXT NOT NULL DEFAULT 'unknown',
+      reason TEXT NOT NULL,
+      detected_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
     -- Indexes for performance
     CREATE INDEX IF NOT EXISTS idx_sec_filings_cik_date ON sec_filings(cik, filing_date);
     CREATE INDEX IF NOT EXISTS idx_holder_positions_cik_quarter ON holder_positions(cik, quarter);
@@ -176,6 +220,12 @@ function initSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_holder_changes_quarter ON holder_changes(quarter);
     CREATE INDEX IF NOT EXISTS idx_insider_transactions_symbol_date ON insider_transactions(symbol, transaction_date);
     CREATE INDEX IF NOT EXISTS idx_cik_lookup_ticker ON cik_lookup(ticker);
+    
+    -- Options indexes
+    CREATE INDEX IF NOT EXISTS idx_iv_history_symbol_date ON iv_history(symbol, date);
+    CREATE INDEX IF NOT EXISTS idx_pcr_history_symbol_date ON pcr_history(symbol, date);
+    CREATE INDEX IF NOT EXISTS idx_unusual_activity_symbol_detected ON unusual_activity(symbol, detected_at);
+    CREATE INDEX IF NOT EXISTS idx_unusual_activity_score ON unusual_activity(score DESC);
   `);
 
   // Add columns to tracked_holders if they don't exist
