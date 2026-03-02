@@ -227,6 +227,85 @@ function initSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_unusual_activity_symbol_detected ON unusual_activity(symbol, detected_at);
     CREATE INDEX IF NOT EXISTS idx_unusual_activity_score ON unusual_activity(score DESC);
 
+    -- Opportunity engine tables
+    CREATE TABLE IF NOT EXISTS detected_signals (
+      id TEXT PRIMARY KEY,
+      type TEXT NOT NULL,
+      category TEXT NOT NULL CHECK(category IN ('price', 'volume', 'holder', 'options', 'news', 'social', 'technical')),
+      symbol TEXT NOT NULL,
+      source TEXT NOT NULL,
+      description TEXT NOT NULL,
+      strength REAL NOT NULL CHECK(strength >= 0 AND strength <= 1),
+      direction TEXT NOT NULL CHECK(direction IN ('bullish', 'bearish', 'neutral')),
+      data TEXT NOT NULL DEFAULT '{}',
+      timestamp TEXT NOT NULL,
+      detected_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS opportunity_conditions (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT DEFAULT '',
+      rules TEXT NOT NULL DEFAULT '[]',
+      logic TEXT NOT NULL DEFAULT 'AND' CHECK(logic IN ('AND', 'OR')),
+      symbols TEXT DEFAULT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      notify_on_trigger INTEGER NOT NULL DEFAULT 1,
+      trigger_count INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      last_triggered TEXT DEFAULT NULL,
+      last_evaluated TEXT DEFAULT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS opportunity_opportunities (
+      id TEXT PRIMARY KEY,
+      symbol TEXT NOT NULL,
+      title TEXT NOT NULL,
+      thesis TEXT NOT NULL,
+      confidence INTEGER NOT NULL CHECK(confidence >= 0 AND confidence <= 100),
+      direction TEXT NOT NULL CHECK(direction IN ('long', 'short', 'neutral')),
+      timeframe TEXT NOT NULL CHECK(timeframe IN ('day', 'swing', 'position')),
+      signals TEXT NOT NULL DEFAULT '[]',
+      evidence TEXT NOT NULL DEFAULT '[]',
+      suggested_entry REAL DEFAULT NULL,
+      suggested_stop REAL DEFAULT NULL,
+      suggested_target REAL DEFAULT NULL,
+      risk_reward REAL DEFAULT NULL,
+      status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'triggered', 'expired', 'won', 'lost')),
+      tags TEXT NOT NULL DEFAULT '[]',
+      outcome TEXT DEFAULT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS opportunity_backtests (
+      id TEXT PRIMARY KEY,
+      condition_id TEXT NOT NULL,
+      period_from TEXT NOT NULL,
+      period_to TEXT NOT NULL,
+      triggers TEXT NOT NULL DEFAULT '[]',
+      summary TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (condition_id) REFERENCES opportunity_conditions(id) ON DELETE CASCADE
+    );
+
+    -- Opportunity indexes
+    CREATE INDEX IF NOT EXISTS idx_detected_signals_symbol ON detected_signals(symbol);
+    CREATE INDEX IF NOT EXISTS idx_detected_signals_type ON detected_signals(type);
+    CREATE INDEX IF NOT EXISTS idx_detected_signals_category ON detected_signals(category);
+    CREATE INDEX IF NOT EXISTS idx_detected_signals_detected ON detected_signals(detected_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_detected_signals_strength ON detected_signals(strength DESC);
+    
+    CREATE INDEX IF NOT EXISTS idx_opportunity_conditions_enabled ON opportunity_conditions(enabled);
+    CREATE INDEX IF NOT EXISTS idx_opportunity_conditions_last_triggered ON opportunity_conditions(last_triggered DESC);
+    
+    CREATE INDEX IF NOT EXISTS idx_opportunity_opportunities_symbol ON opportunity_opportunities(symbol);
+    CREATE INDEX IF NOT EXISTS idx_opportunity_opportunities_confidence ON opportunity_opportunities(confidence DESC);
+    CREATE INDEX IF NOT EXISTS idx_opportunity_opportunities_status ON opportunity_opportunities(status);
+    CREATE INDEX IF NOT EXISTS idx_opportunity_opportunities_direction ON opportunity_opportunities(direction);
+    CREATE INDEX IF NOT EXISTS idx_opportunity_opportunities_timeframe ON opportunity_opportunities(timeframe);
+    CREATE INDEX IF NOT EXISTS idx_opportunity_opportunities_created ON opportunity_opportunities(created_at DESC);
+
     -- News tables
     CREATE TABLE IF NOT EXISTS news_sources (
       id TEXT PRIMARY KEY,
